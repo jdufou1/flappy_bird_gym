@@ -1,14 +1,33 @@
+"""
+Imports
+"""
+from xmlrpc.client import Boolean
 from flappy_bird_gym.envs.flappy_bird_env_rgb import FlappyBirdEnvRGB
 import torch
 import torch.nn as nn
 import numpy as np
-from tqdm import tqdm
 import random
-import matplotlib.pyplot as plt
 from collections import deque
 import time
+from time import gmtime, strftime
+import sys
 import cv2
+from utils import *
 from torch.utils.tensorboard import SummaryWriter
+
+"""
+Script d'execution d'un D3QN pour l'environnement flappy bird gym
+credit : https://github.com/Talendar/flappy-bird-gym
+"""
+"""
+global variable
+"""
+
+
+path_q_network = "q_network_flappybird_weights"
+path_q_target_network = "q_target_network_flappybird_weights"
+path_best_model_network = "best_model_network_flappybird_weights"
+
 
 
 
@@ -82,11 +101,15 @@ class TrainModel :
         nb_tests_iteration : int,
         epsilon_decay : float,
         epsilon_min : float,
+        epsilon : float,
         batch_size : int,
         size_replay_buffer : int,
         update_frequency : int,
         tau : float,
-        device
+        device,
+        best_value : float,
+        current_episode : int, 
+        load_model : bool
     ) :
         
         """
@@ -100,12 +123,15 @@ class TrainModel :
         self.nb_tests_iteration = nb_tests_iteration # periode d'affichage des tests
         self.epsilon_decay = epsilon_decay # entre [0,1] coeficient multiplicateur de epsilon
         self.epsilon_min = epsilon_min # valeur min de epsilon, jusqua combien elle peut diminuer
-        self.epsilon = 1.0 
+        self.epsilon = epsilon
         self.batch_size = batch_size # taille du sous ensemble du replay buffer
         self.size_replay_buffer = size_replay_buffer # taille du replay buyffer
         self.update_frequency = update_frequency # periode de mise a jour du target network
         self.tau = tau # facteur de synchronisation
-        
+        self.current_episode = current_episode
+        self.load_model = load_model
+
+
         self.writer = SummaryWriter("./logs/d3qn_flappy_bird_rgb_rewards")
         
         
@@ -114,14 +140,19 @@ class TrainModel :
         """
         self.device = device
 
+
         self.q_network , self.q_target_network, self.best_model = self.initialisation_q_networks() # initialisation et copie du q_network
-        self.best_value = -1e10
+        if self.load_model :
+            self.load_networks()
+        self.best_value = best_value
         
         """
         TESTING
         """
         self.list_mean_rewards = list() 
         self.list_std_rewards = list()
+
+        self.print_params()
         
     def initialisation_q_networks(self) :
         """
@@ -180,7 +211,9 @@ class TrainModel :
         
         env = FlappyBirdEnvRGB()
         
-        for episode in range(self.nb_episode) :
+        for episode in range(self.current_episode,self.nb_episode) :
+            self.current_episode = episode
+
             state = env.reset()
             state,state_t = self.pre_processing(state)
             done = False
@@ -218,12 +251,11 @@ class TrainModel :
                     rewards = np.asarray([exp[3] for exp in batch],dtype=np.float32)
                     new_states = [exp[4] for exp in batch]
                     
+
                     states_t = torch.stack(states).squeeze(1)
                     new_states_t = torch.stack(new_states).squeeze(1)
 
-                    # states_t = torch.as_tensor(states , dtype=torch.float32, device = self.device)
                     dones_t = torch.as_tensor(dones , dtype = torch.int64, device = self.device).unsqueeze(1)
-                    # new_states_t = torch.as_tensor(new_states , dtype=torch.float32, device = self.device)
                     actions_t = torch.as_tensor(actions , dtype = torch.int64, device = self.device).unsqueeze(1)
                     rewards_t = torch.as_tensor(rewards , dtype=torch.float32, device = self.device).unsqueeze(1)
 
@@ -264,17 +296,21 @@ class TrainModel :
                     self.best_model.load_state_dict(self.q_network.state_dict())
                 
                 """
+                Saving
+                """
+                self.save_networks()
+                self.write_params(mean_rewards, std_rewards)
+
+                """
                 display :
                 """
                 self.writer.add_scalar('TP3 : rewards FlappyBird', mean_rewards, episode)
-                print(f"({(episode/self.nb_episode*100)}%) - Episode : {episode} - mean rewards : {mean_rewards} - std rewards : {std_rewards} - eps : {self.epsilon} - time : {diff_time}s - best value : {self.best_value}")
-        
-        
+                print(f"[LOG] : ({(episode/self.nb_episode*100)}%) - Episode : {episode} - mean rewards : {mean_rewards} - std rewards : {std_rewards} - eps : {self.epsilon} - time : {diff_time}s - best value : {self.best_value}")
+            
     def update_q_target_network(self) : 
         """ update du q-target en fonction du tau"""   
         for target_param, local_param in zip(self.q_target_network.parameters(), self.q_network.parameters()):
-            target_param.data.copy_(self.tau*local_param.data + (1.0-self.tau)*target_param.data)  
-        
+            target_param.data.copy_(self.tau*local_param.data + (1.0-self.tau)*target_param.data)          
         
     def testing(self) :
         """
@@ -289,7 +325,6 @@ class TrainModel :
         list_cum_sum = np.asarray(list_cum_sum , dtype=np.float32)    
         
         return list_cum_sum.mean(), list_cum_sum.std()
-    
             
     def one_test_model(self) :
         """
@@ -315,42 +350,137 @@ class TrainModel :
                 
         return cum_sum
     
-    def save_best_model(self) :
-        path = "best_model_d3qn_lunarlanderdiscret" + str(self.best_value)
-        torch.save(self.best_model.state_dict(),path)
+    def save_networks(self) :
+        print("[STATUS] : Models saving...")
+        torch.save(self.q_network.state_dict(),path_q_network)
+        torch.save(self.q_target_network.state_dict(),path_q_target_network)
+        torch.save(self.best_model.state_dict(),path_best_model_network)
 
-device =  torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"device used {device}")
-nb_episode = 10000000
-discount_factor = 0.99
-learning_rate = 0.0003
-test_frequency = 10
-nb_tests_iteration = 10
-epsilon_decay = 0.995
-epsilon_min = 0.01
-epsilon = 1.0
-batch_size = 64
-size_replay_buffer = 50000
-update_frequency = 1
-tau = 1e-3
+    def load_networks(self) :
+        print("[STATUS] : Models loading...")
+        self.q_network.load_state_dict(torch.load(path_q_network, map_location=self.device))
+        self.q_target_network.load_state_dict(torch.load(path_q_target_network, map_location=self.device))
+        self.best_model.load_state_dict(torch.load(path_best_model_network, map_location=self.device))
 
-nb_actions = 2
+    def write_params(self,mean_value,std_value) :
+        params = dict()
+        params["current_time"] = strftime("%d %b %Y %H:%M:%S", gmtime())
+        params["current_episode"] = self.current_episode
+        params["nb_episode"] = self.nb_episode
+        params["discount_factor"] = self.discount_factor
+        params["learning_rate"] = self.learning_rate
+        params["test_frequency"] = self.test_frequency
+        params["nb_tests_iteration"] = self.nb_tests_iteration
+        params["epsilon_decay"] = self.epsilon_decay
+        params["epsilon_min"] = self.epsilon_min
+        params["epsilon"] = self.epsilon
+        params["batch_size"] = self.batch_size
+        params["size_replay_buffer"] = self.size_replay_buffer
+        params["update_frequency"] = self.update_frequency
+        params["tau"] = self.tau
+        params["mean_value"] = mean_value
+        params["std_value"] = std_value
+        params["best_value"] = self.best_value
+        write_params("./csv_data_parameters_flappy_bird.csv", params)
 
-train_model = TrainModel(
-      nb_episode = nb_episode,
-      discount_factor = discount_factor,
-      learning_rate = learning_rate,
-      test_frequency = test_frequency,
-      nb_tests_iteration = nb_tests_iteration,
-      epsilon_decay = epsilon_decay,
-      epsilon_min = epsilon_min,
-      batch_size = int(batch_size),
-      size_replay_buffer = size_replay_buffer,
-      update_frequency = update_frequency,
-      tau = tau,
-      device = device
-)
+    def print_params(self) :
+        print("[LOG] : Params : ")
+        print("1#      current_episode : "+str(self.current_episode))
+        print("2#      nb_episode : "+str(self.nb_episode))
+        print("3#      discount_factor : "+str(self.discount_factor))
+        print("4#      learning_rate : "+str(self.learning_rate))
+        print("5#      current_episode : "+str(self.current_episode))
+        print("6#      test_frequency : "+str(self.test_frequency))
+        print("7#      nb_tests_iteration : "+str(self.nb_tests_iteration))
+        print("8#      epsilon_decay : "+str(self.epsilon_decay))
+        print("9#      epsilon_min : "+str(self.epsilon_min))
+        print("10#     epsilon : "+str(self.epsilon))
+        print("11#     batch_size : "+str(self.batch_size))
+        print("12#     size_replay_buffer : "+str(self.size_replay_buffer))
+        print("13#     update_frequency : "+str(self.update_frequency))
+        print("14#     tau : "+str(self.tau))
+        print("15#     best_value : "+str(self.best_value))
 
-train_model.training()
 
-train_model.save_best_model()
+if __name__ == '__main__':
+
+
+    print("##################################")
+    print("      D3QN for Flappy Bird        ")
+    print("- Target and Replay Buffer        ")
+    print("- Dueling Network                 ")
+    print("- Double DQNetwork                ")
+    print("##################################")
+
+
+    args = sys.argv[1:]
+
+    restart = False
+    if len(args) > 0 :
+        restart = True
+
+
+    if restart :
+        print("[LOG] : Restart mode selected")
+        device =  torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[LOG] : Device used : {device}")
+        params = get_dict_last_params("./csv_data_parameters_flappy_bird.csv")
+
+        nb_episode = int(params["nb_episode"])
+        current_episode = int(params["current_episode"])
+        discount_factor = float(params["discount_factor"])
+        learning_rate = float(params["learning_rate"])
+        test_frequency = int(params["test_frequency"])
+        nb_tests_iteration = int(params["nb_tests_iteration"])
+        epsilon_decay = float(params["epsilon_decay"])
+        epsilon_min = float(params["epsilon_min"])
+        epsilon = float(params["epsilon"])
+        batch_size = int(params["batch_size"])
+        size_replay_buffer = int(params["size_replay_buffer"])
+        update_frequency = int(params["update_frequency"])
+        tau = float(params["tau"])
+        best_value = float(params["best_value"])
+
+
+    else :
+        print("[LOG] : Initialisation mode selected")
+        device =  torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[LOG] : Device used : {device}")
+        nb_episode = 10000000
+        current_episode = 0
+        discount_factor = 0.99
+        learning_rate = 0.0003
+        test_frequency = 10
+        nb_tests_iteration = 10
+        epsilon_decay = 0.9995
+        epsilon_min = 0.02
+        epsilon = 1.0
+        batch_size = 64
+        size_replay_buffer = 50000
+        update_frequency = 1
+        tau = 1e-3
+        best_value = -1e10
+
+    load_model = restart
+    nb_actions = 2
+
+    train_model = TrainModel(
+        nb_episode = nb_episode,
+        discount_factor = discount_factor,
+        learning_rate = learning_rate,
+        test_frequency = test_frequency,
+        nb_tests_iteration = nb_tests_iteration,
+        epsilon_decay = epsilon_decay,
+        epsilon_min = epsilon_min,
+        epsilon = epsilon,
+        batch_size = batch_size,
+        size_replay_buffer = size_replay_buffer,
+        update_frequency = update_frequency,
+        tau = tau,
+        device = device,
+        best_value = best_value,
+        current_episode = current_episode,
+        load_model = load_model
+    )
+
+    train_model.training()
