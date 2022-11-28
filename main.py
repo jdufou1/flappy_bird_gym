@@ -323,6 +323,8 @@ class TrainModel :
             with savepath.open("wb") as fp :
                 torch.save(self.state,fp)
             print("[STATUS] : Models saving... SUCCESS")
+        except KeyboardInterrupt :    
+            print("[STATUS] : Models saving... FAIL KeyboardInterrupt")
         except Exception as e :
             print("[STATUS] : Models saving... FAIL ",e)
 
