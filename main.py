@@ -318,10 +318,13 @@ class TrainModel :
         return cum_sum
     
     def save_model(self) :
-        print("[STATUS] : Models saving...")
-        savepath = Path("./parameters_flappy_bird_d3qn.pch")
-        with savepath.open("wb") as fp :
-            torch.save(self.state,fp)
+        try : 
+            savepath = Path("./parameters_flappy_bird_d3qn.pch")
+            with savepath.open("wb") as fp :
+                torch.save(self.state,fp)
+            print("[STATUS] : Models saving... SUCCESS")
+        except Exception as e :
+            print("[STATUS] : Models saving... FAIL ",e)
 
 
 
