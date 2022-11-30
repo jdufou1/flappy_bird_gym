@@ -151,8 +151,6 @@ class TrainModel :
         self.list_std_rewards = list()
 
         self.print_params()
-
-        
         
     def pre_processing(self,state,old_frame = None) : 
         """
@@ -175,6 +173,7 @@ class TrainModel :
     def training(self) :
         
         start_time = time.time()
+        start_training_time = start_time
         
         env = FlappyBirdEnvRGB()
         
@@ -217,7 +216,6 @@ class TrainModel :
                     dones = np.asarray([exp[2] for exp in batch],dtype=int)
                     rewards = np.asarray([exp[3] for exp in batch],dtype=np.float32)
                     new_states = [exp[4] for exp in batch]
-                    
 
                     states_t = torch.stack(states).squeeze(1)
                     new_states_t = torch.stack(new_states).squeeze(1)
@@ -254,6 +252,7 @@ class TrainModel :
                 
                 end_time = time.time()
                 diff_time = end_time - start_time
+                training_time = end_time - start_training_time
                 start_time = time.time()
                 """
                 Keep the best model
@@ -272,7 +271,10 @@ class TrainModel :
                 display :
                 """
                 self.writer.add_scalar('TP3 : rewards FlappyBird', mean_rewards, episode)
-                print(f"[LOG] : ({(episode/self.state.nb_episode*100)}%) - Episode : {episode} - mean rewards : {mean_rewards} - std rewards : {std_rewards} - eps : {self.state.epsilon} - time : {diff_time}s - best value : {self.state.best_value} - rb : {len(self.state.replay_buffer)}")
+                print(f"[LOG] : ({(episode/self.state.nb_episode*100)}%) - Episode : {episode} - mean rewards : {mean_rewards} - std rewards : {std_rewards} - eps : {self.state.epsilon} - time : {diff_time}s - best value : {self.state.best_value} - rb : {len(self.state.replay_buffer)} - training time : {round(training_time,3)}")
+
+                if training_time > 60 * 60 * 10 : # 10 hours to seconds
+                    break
             
     def update_q_target_network(self) : 
         """ update du q-target en fonction du tau"""   
@@ -314,7 +316,7 @@ class TrainModel :
             state = new_state_stacked
             state_t = new_state_t
             cum_sum += reward
-                
+            
         return cum_sum
     
     def save_model(self) :
